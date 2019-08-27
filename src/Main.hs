@@ -2,7 +2,7 @@ module Main where
 
 import System.Environment(getArgs)
 import System.Exit(exitFailure)
-import System.IO(hGetContents, stdin, openFile, IOMode(ReadMode))
+import System.IO(hSetBinaryMode, hGetContents, stdin, openFile, IOMode(ReadMode))
 import System.Console.ANSI(setSGRCode, SGR(..), ConsoleLayer(Foreground), ColorIntensity(..), Color(..)) -- from 0.9 of ansi-terminal package: hSupportsANSIColor, setPaletteColor
 import Text.ParserCombinators.Parsec(Parser, parse, (<|>), many, many1, noneOf, try, between, char, string, sepBy1, eof, hexDigit, count, digit, optional, oneOf, spaces)
 import Data.Either(isRight)
@@ -31,18 +31,19 @@ parseCSV filename = case filename of
                       _   -> parseCSV' filename =<< openFile filename ReadMode
   where
     parseCSV' filename' handle = do
+      hSetBinaryMode handle True
       contents <- hGetContents handle
       let delim = if count' ';' contents > count' ',' contents then ';' else ','
       return $ mapM (either (const Nothing) Just . parse (record delim) filename') $ lines contents
 
-parse' :: Parser String -> String -> Bool
-parse' p = isRight . parse (p >> eof) ""
+canParse :: Parser a -> String -> Bool
+canParse p = isRight . parse (p >> eof) ""
 
 looksLikeHex :: String -> Bool
-looksLikeHex = parse' $ many hexDigit
+looksLikeHex = canParse $ many hexDigit
 
 looksLikeHash :: String -> Bool
-looksLikeHash = parse' $ (try (char '0' >> char 'x' >> count 2 hexDigit)
+looksLikeHash = canParse $ (try (char '0' >> char 'x' >> count 2 hexDigit)
                           <|> (char '#' >> count 4 hexDigit)
                           <|> count 6 hexDigit
                          ) >> many hexDigit
@@ -51,10 +52,10 @@ number :: Parser String
 number = optional (oneOf "-+") >> many1 digit >> (many (char ',' >> count 3 digit) <|> many (char '\'' >> count 3 digit)) >> optional (char '.' >> many1 digit) >> return ""
 
 looksLikeNumber :: String -> Bool
-looksLikeNumber = parse' number
+looksLikeNumber = canParse number
 
 looksLikeMoney :: String -> Bool
-looksLikeMoney = parse' $ (count 1 (oneOf "$£€") <|> string "CHF" <|> string "AUD" <|> string "AU$") >> spaces >> number
+looksLikeMoney = canParse $ (count 1 (oneOf "$£€") <|> string "CHF" <|> string "AUD" <|> string "AU$") >> spaces >> number
 
 colorify :: Bool -> Color -> String -> String
 colorify withColour col x = if withColour then setSGRCode [SetColor Foreground Dull col] ++ x ++ setSGRCode [Reset] else x
@@ -80,7 +81,7 @@ calcPadding a b = zipWith const (a ++ [0, 0..]) (if length a > length b then a e
 getLengths :: [[String]] -> [Int]
 getLengths csv = getLengths' [] $ map (map length) csv
   where
-    getLengths' r []     = map (\a -> min 50 (a+1)) r
+    getLengths' r []     = map (\a -> min 100 (a+1)) r
     getLengths' r (x:xs) = getLengths' (zipWith max (calcPadding r x) (calcPadding x r)) xs
 
 showCSV :: Bool -> CSV -> String
@@ -94,7 +95,6 @@ showCSV withColour csv = showCSV' (getLengths csv) csv
 main :: IO ()
 main = do
   args <- getArgs
-  csvs <- case args of
-    [] -> (:[]) <$> parseCSV "-"
-    _  -> mapM parseCSV args
+  let args' = if null args then ["-"] else args
+  csvs <- mapM parseCSV args'
   maybe exitFailure (putStr . showCSV True . concat) (sequence csvs)
